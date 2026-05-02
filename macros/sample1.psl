@@ -1,0 +1,7 @@
+# sample.csl
+# すでにバッファはクリアされているので、ここから開始
+wait >
+sendln 'Start-Process powershell -verb runas'
+wait >
+sendln ls
+wait >

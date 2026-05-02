@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions; // 正規表現のために追加
 
 public class Orchestrator
 {
@@ -21,20 +22,30 @@ public class Orchestrator
             // コメント行（# または ;）と空行をスキップ
             if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";")) continue;
 
-            // 最初のスペースでコマンドと引数を分割
-            int spaceIndex = trimmedLine.IndexOf(' ');
-            string cmd = spaceIndex == -1 ? trimmedLine.ToLower() : trimmedLine.Substring(0, spaceIndex).ToLower();
-            string arg = spaceIndex == -1 ? string.Empty : trimmedLine.Substring(spaceIndex + 1).Trim();
+            // --- 引数解析ロジックの修正 ---
+            // 正規表現により、スペース区切りだが引用符内は保持する
+            // 1. [^\s"']+ (引用符もスペースもない連続した文字)
+            // 2. "([^"]*)" (ダブルクォートで囲まれた中身)
+            // 3. '([^']*)' (シングルクォートで囲まれた中身)
+            var matches = Regex.Matches(trimmedLine, @"(?<match>[^\s""']+)|""(?<match>[^""]*)""|'(?<match>[^']*)'");
+            
+            if (matches.Count == 0) continue;
+
+            // 1番目のマッチをコマンド、2番目以降を引数とする
+            string cmd = matches[0].Groups["match"].Value.ToLower();
+            
+            // 引数部分の取得（2番目以降の要素を結合するか、特定のコマンドでは2番目のみを使用）
+            string arg = matches.Count > 1 ? matches[1].Groups["match"].Value : string.Empty;
 
             if (cmd == "sendln")
             {
-                // 引数をそのまま送信し、PowerShell側でクォートを解釈させます
+                // sendln の場合は、第1引数（arg）を送信
                 ps.SendLn(arg);
             }
             else if (cmd == "wait")
             {
-                // 待機文字列を判定する際は、念のためクォートを外して比較します
-                ps.Wait(Unquote(arg), 30000);
+                // 正規表現の Groups["match"].Value ですでにクォートは外れているためそのまま渡す
+                ps.Wait(arg, 30000);
             }
             else if (cmd == "clearbuffer")
             {
@@ -42,7 +53,6 @@ public class Orchestrator
             }
             else if (cmd == "pause")
             {
-                // 指定秒数待機。数値変換に失敗した場合は1秒として処理
                 int seconds;
                 if (!int.TryParse(arg, out seconds))
                 {
@@ -52,21 +62,11 @@ public class Orchestrator
             }
             else
             {
-                // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待ちます
+                // 未知のコマンド（PowerShell直接実行）
+                // ここは元の行をそのまま送る
                 ps.SendLn(trimmedLine);
                 ps.Wait(">", 30000);
             }
         }
-    }
-
-    private string Unquote(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return text;
-        if ((text.StartsWith("\"") && text.EndsWith("\"")) ||
-            (text.StartsWith("'") && text.EndsWith("'")))
-        {
-            return text.Substring(1, text.Length - 2);
-        }
-        return text;
     }
 }
