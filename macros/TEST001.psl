@@ -1,0 +1,21 @@
+﻿# C-S-O pauseコマンド テストマクロ
+
+# 1. まず現在の時刻を表示（開始点）
+echo "--- Test Start: $(Get-Date -Format 'HH:mm:ss') ---"
+
+# 2. 3秒間のポーズを実行
+# 画面が3秒間止まれば成功です
+pause 10
+
+# 3. ポーズ後の時刻を表示
+echo "--- After 3s Pause: $(Get-Date -Format 'HH:mm:ss') ---"
+
+# 4. 引数なし（デフォルト1秒）のテスト
+echo "Waiting for default pause (1s)..."
+pause
+
+# 5. 終了時刻を表示
+echo "--- Test End: $(Get-Date -Format 'HH:mm:ss') ---"
+
+# 6. 最後にプロンプトが戻ることを確認
+whoami
