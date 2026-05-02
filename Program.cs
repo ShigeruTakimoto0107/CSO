@@ -17,7 +17,7 @@ class Program
             try
             {
                 // 起動直後の初期メッセージを読み飛ばすための猶予
-                Thread.Sleep(1000);
+                //Thread.Sleep(1);
                 ps.ClearBuffer();
 
                 Orchestrator orch = new Orchestrator();
