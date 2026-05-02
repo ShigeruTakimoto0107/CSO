@@ -8,7 +8,7 @@ public class Orchestrator
     public void ExecuteFile(string filePath, PowerShellController ps)
     {
         if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
-        // UTF-8(BOMあり)ファイルを正しく読み込みます[cite: 3]
+        // UTF-8(BOMあり)ファイルを正しく読み込みます
         string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
         ExecuteMacro(new List<string>(lines), ps);
     }
@@ -18,7 +18,7 @@ public class Orchestrator
         foreach (string line in commands)
         {
             string trimmedLine = line.Trim();
-            // コメント行（# または ;）と空行をスキップ[cite: 3]
+            // コメント行（# または ;）と空行をスキップ
             if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";")) continue;
 
             // 最初のスペースでコマンドと引数を分割
@@ -28,21 +28,31 @@ public class Orchestrator
 
             if (cmd == "sendln")
             {
-                // 引数をそのまま送信し、PowerShell側でクォートを解釈させます[cite: 3]
+                // 引数をそのまま送信し、PowerShell側でクォートを解釈させます
                 ps.SendLn(arg);
             }
             else if (cmd == "wait")
             {
-                // 待機文字列を判定する際は、念のためクォートを外して比較します[cite: 3]
+                // 待機文字列を判定する際は、念のためクォートを外して比較します
                 ps.Wait(Unquote(arg), 30000);
             }
             else if (cmd == "clearbuffer")
             {
                 ps.ClearBuffer();
             }
+            else if (cmd == "pause")
+            {
+                // 指定秒数待機。数値変換に失敗した場合は1秒として処理
+                int seconds;
+                if (!int.TryParse(arg, out seconds))
+                {
+                    seconds = 1;
+                }
+                System.Threading.Thread.Sleep(seconds * 1000);
+            }
             else
             {
-                // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待ちます[cite: 3]
+                // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待ちます
                 ps.SendLn(trimmedLine);
                 ps.Wait(">", 30000);
             }
