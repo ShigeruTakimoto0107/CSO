@@ -1,7 +1,6 @@
 ﻿using System;
-using System.Diagnostics;
-using System.Security.Principal;
-using System.Windows.Forms;
+using System.IO;
+using System.Collections.Generic;
 
 namespace PowerShellTerminal
 {
@@ -9,86 +8,45 @@ namespace PowerShellTerminal
     {
         static void Main(string[] args)
         {
-            if (args.Length == 0)
+            // 管理者権限チェック（Orchestratorからの再起動判定に使用）
+            if (args.Length > 0 && args[0].EndsWith(".psl"))
             {
-                Console.WriteLine("使用法: pst.exe <macro_file.psl>");
-                return;
+                RunMacro(args[0]);
             }
-
-            string filePath = args[0];
-            Orchestrator orchestrator = new Orchestrator();
-
-            // 管理者権限が必要なマクロかチェック
-            if (orchestrator.IsAdminRequired(filePath))
+            else
             {
-                if (!IsRunAsAdmin())
-                {
-                    RestartAsAdmin(filePath);
-                    return;
-                }
+                Console.WriteLine("PowerShell Terminal (PST) - .pslファイルを指定してください。");
             }
+        }
 
-            // コンストラクタ内でPowerShellプロセスが起動されるため、Init()は不要
-            PowerShellController ps = new PowerShellController();
-            try
+        static void RunMacro(string filePath)
+        {
+            using (PowerShellController ps = new PowerShellController())
             {
-                // マクロファイルの実行
-                Console.WriteLine("--- マクロ実行開始 ---");
-                orchestrator.ExecuteFile(filePath, ps);
-                Console.WriteLine("--- マクロ実行完了 (対話モードに移行します。終了するには 'exit' を入力してください) ---");
-
-                // マクロ終了後、手動入力を受け付けるループ
-                while (true)
+                Orchestrator orchestrator = new Orchestrator();
+                
+                try
                 {
-                    Console.Write("PST> ");
-                    string input = Console.ReadLine();
+                    // マクロの実行
+                    orchestrator.ExecuteFile(filePath, ps);
 
-                    if (string.IsNullOrEmpty(input)) continue;
-
-                    if (input.Trim().ToLower() == "exit")
+                    // マクロ終了後の対話モード
+                    // PST> プロンプトを廃止し、PowerShellのプロンプトをそのまま活かす
+                    while (true)
                     {
-                        ps.SendLn("exit");
-                        break;
+                        string input = Console.ReadLine();
+                        if (string.IsNullOrEmpty(input)) continue;
+                        if (input.ToLower() == "exit") break;
+
+                        ps.SendLn(input);
+                        // SendLnの内部でプロンプト ">" を待機し表示するため、
+                        // ここで手動のプロンプト出力は行わない
                     }
-
-                    ps.SendLn(input);
-                    ps.Wait(">", 30000);
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("エラー: " + ex.Message);
-            }
-            finally
-            {
-                // 既存のDisposeメソッドを呼び出してプロセスを安全に終了させる
-                ps.Dispose();
-            }
-        }
-
-        static bool IsRunAsAdmin()
-        {
-            WindowsIdentity identity = WindowsIdentity.GetCurrent();
-            WindowsPrincipal principal = new WindowsPrincipal(identity);
-            return principal.IsInRole(WindowsBuiltInRole.Administrator);
-        }
-
-        static void RestartAsAdmin(string filePath)
-        {
-            ProcessStartInfo startInfo = new ProcessStartInfo();
-            startInfo.UseShellExecute = true;
-            startInfo.WorkingDirectory = Environment.CurrentDirectory;
-            startInfo.FileName = Application.ExecutablePath;
-            startInfo.Arguments = "\"" + filePath + "\"";
-            startInfo.Verb = "runas";
-
-            try
-            {
-                Process.Start(startInfo);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("管理者権限での実行がキャンセルされました: " + ex.Message);
+                catch (Exception ex)
+                {
+                    Console.WriteLine("エラー: " + ex.Message);
+                }
             }
         }
     }

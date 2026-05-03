@@ -4,97 +4,79 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
-public class PowerShellController : IDisposable
+namespace PowerShellTerminal
 {
-    private readonly Process _psProcess;
-    private readonly StringBuilder _outputBuffer = new StringBuilder();
-    private readonly object _bufferLock = new object();
-    private bool _isDisposing = false;
-
-    public PowerShellController()
+    public class PowerShellController : IDisposable
     {
-        _psProcess = new Process();
-        _psProcess.StartInfo.FileName = "powershell.exe";
-        _psProcess.StartInfo.Arguments = "-NoLogo -NoExit -ExecutionPolicy Bypass";
-        _psProcess.StartInfo.UseShellExecute = false;
-        _psProcess.StartInfo.RedirectStandardInput = true;
-        _psProcess.StartInfo.RedirectStandardOutput = true;
-        _psProcess.StartInfo.RedirectStandardError = true;
-        _psProcess.StartInfo.CreateNoWindow = true;
+        private Process psProcess;
+        private StringBuilder outputBuffer = new StringBuilder();
+        private readonly object bufferLock = new object();
 
-        // 日本語環境のデフォルト(Shift-JIS)で受け取ることで文字化けを解消[cite: 1]
-        _psProcess.StartInfo.StandardOutputEncoding = Encoding.Default;
-
-        _psProcess.Start();
-
-        Thread readThread = new Thread(ReadStream);
-        readThread.IsBackground = true;
-        readThread.Start();
-    }
-
-    private void ReadStream()
-    {
-        while (!_isDisposing)
+        public PowerShellController()
         {
-            try
-            {
-                if (_psProcess.HasExited) break;
-                int ch = _psProcess.StandardOutput.Read();
-                if (ch == -1) break;
+            psProcess = new Process();
+            psProcess.StartInfo.FileName = "powershell.exe";
+            // -NoPromptを付けず、標準のプロンプトを出力させる
+            psProcess.StartInfo.Arguments = "-NoExit -ExecutionPolicy Bypass";
+            psProcess.StartInfo.UseShellExecute = false;
+            psProcess.StartInfo.RedirectStandardInput = true;
+            psProcess.StartInfo.RedirectStandardOutput = true;
+            psProcess.StartInfo.RedirectStandardError = true;
+            psProcess.StartInfo.CreateNoWindow = true;
+            psProcess.StartInfo.StandardOutputEncoding = Encoding.Default;
 
-                char c = (char)ch;
-                lock (_bufferLock)
+            psProcess.OutputDataReceived += (s, e) => {
+                if (e.Data != null)
                 {
-                    _outputBuffer.Append(c);
-                    // 親コンソールへそのまま出力
-                    Console.Write(c); 
+                    lock (bufferLock)
+                    {
+                        outputBuffer.AppendLine(e.Data);
+                        Console.WriteLine(e.Data);
+                    }
                 }
-            }
-            catch { break; }
+            };
+
+            psProcess.Start();
+            psProcess.BeginOutputReadLine();
+            psProcess.BeginErrorReadLine();
+
+            // 起動直後のプロンプト ">" を待機して初期表示を完了させる
+            Wait(">", 5000);
         }
-    }
 
-    public void SendLn(string command)
-    {
-        _psProcess.StandardInput.WriteLine(command);
-    }
-
-    public void ClearBuffer()
-    {
-        lock (_bufferLock)
+        public void SendLn(string command)
         {
-            _outputBuffer.Length = 0;
+            outputBuffer.Clear(); // 送信前にバッファをクリアして判定精度を高める
+            psProcess.StandardInput.WriteLine(command);
+            // コマンド送信後、プロンプトが戻るまで待機
+            Wait(">", 30000);
         }
-    }
 
-    public void Wait(string target, int timeoutMs)
-    {
-        DateTime start = DateTime.Now;
-        while ((DateTime.Now - start).TotalMilliseconds < timeoutMs)
+        public bool Wait(string target, int timeoutMs)
         {
-            lock (_bufferLock)
+            DateTime start = DateTime.Now;
+            while ((DateTime.Now - start).TotalMilliseconds < timeoutMs)
             {
-                string current = _outputBuffer.ToString();
-                int index = current.IndexOf(target);
-                if (index != -1)
+                lock (bufferLock)
                 {
-                    // 一致した箇所までを消費
-                    _outputBuffer.Remove(0, index + target.Length);
-                    return;
+                    string currentOutput = outputBuffer.ToString();
+                    if (currentOutput.Contains(target))
+                    {
+                        return true;
+                    }
                 }
+                Thread.Sleep(50);
             }
-            Thread.Sleep(50);
+            return false;
         }
-        throw new TimeoutException("Wait timeout: " + target);
-    }
 
-    public void Dispose()
-    {
-        _isDisposing = true;
-        if (_psProcess != null)
+        public void Dispose()
         {
-            try { if (!_psProcess.HasExited) _psProcess.Kill(); } catch { }
-            _psProcess.Dispose();
+            if (psProcess != null && !psProcess.HasExited)
+            {
+                psProcess.Kill();
+                psProcess.Dispose();
+            }
         }
     }
 }

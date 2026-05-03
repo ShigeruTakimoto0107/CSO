@@ -8,92 +8,52 @@ namespace PowerShellTerminal
 {
     public class Orchestrator
     {
-        public bool IsAdminRequired(string filePath)
-        {
-            if (!File.Exists(filePath)) return false;
-            string[] lines = File.ReadAllLines(filePath, Encoding.Default);
-            string firstCommand = GetFirstEffectiveCommand(lines);
-            return firstCommand.ToLower() == "admin";
-        }
-
-        private string GetFirstEffectiveCommand(string[] lines)
-        {
-            foreach (string line in lines)
-            {
-                string trimmed = line.Trim();
-                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#") || trimmed.StartsWith(";"))
-                    continue;
-
-                int spaceIndex = trimmed.IndexOf(' ');
-                return spaceIndex == -1 ? trimmed : trimmed.Substring(0, spaceIndex);
-            }
-            return string.Empty;
-        }
-
         public void ExecuteFile(string filePath, PowerShellController ps)
         {
             if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
             string[] lines = File.ReadAllLines(filePath, Encoding.Default);
-            ExecuteMacro(new List<string>(lines), ps);
-        }
 
-        public void ExecuteMacro(List<string> commands, PowerShellController ps)
-        {
-            foreach (string line in commands)
+            foreach (string line in lines)
             {
                 string trimmedLine = line.Trim();
                 if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";"))
                     continue;
 
-                // adminコマンド自体は実行ループではスキップ
-                if (trimmedLine.ToLower() == "admin") continue;
+                // コマンド解析 (引用符対応)
+                var matches = Regex.Matches(trimmedLine, @"(?<match>""[^""]*""|'[^']*'|[^\s]+)");
+                if (matches.Count == 0) continue;
 
-                List<string> args = ParseLine(trimmedLine);
-                string command = args[0].ToLower();
+                string command = matches[0].Value.ToLower();
+                string arg = matches.Count > 1 ? Unquote(matches[1].Value) : "";
 
-                if (command == "sendln")
+                switch (command)
                 {
-                    if (args.Count > 1) ps.SendLn(args[1]);
-                }
-                else if (command == "wait")
-                {
-                    if (args.Count > 1) ps.Wait(args[1], 30000);
-                }
-                else if (command == "pause")
-                {
-                    int seconds = 1;
-                    if (args.Count > 1 && int.TryParse(args[1], out seconds))
-                    {
-                        System.Threading.Thread.Sleep(seconds * 1000);
-                    }
-                }
-                else
-                {
-                    // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待機
-                    ps.SendLn(trimmedLine);
-                    ps.Wait(">", 30000);
+                    case "sendln":
+                        ps.SendLn(arg);
+                        break;
+                    case "wait":
+                        ps.Wait(arg, 30000);
+                        break;
+                    case "pause":
+                        int sec = int.TryParse(arg, out sec) ? sec : 1;
+                        System.Threading.Thread.Sleep(sec * 1000);
+                        break;
+                    default:
+                        // 未知のコマンドはそのままPowerShellへ
+                        ps.SendLn(trimmedLine);
+                        break;
                 }
             }
         }
 
-        private List<string> ParseLine(string line)
+        private string Unquote(string text)
         {
-            List<string> args = new List<string>();
-            // 引用符対応のパースロジック
-            MatchCollection matches = Regex.Matches(line, @"(?<match>[^\s""']+|""(?<inner>[^""]*)""|'(?<inner>[^']*)')");
-            
-            foreach (Match m in matches)
+            if (string.IsNullOrEmpty(text)) return text;
+            if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
             {
-                if (m.Groups["inner"].Success)
-                    args.Add(m.Groups["inner"].Value);
-                else
-                    args.Add(m.Groups["match"].Value);
+                return text.Substring(1, text.Length - 2);
             }
-
-            // 引数が1つ（コマンドのみ）の場合のフォールバック
-            if (args.Count == 0) args.Add(line);
-            
-            return args;
+            return text;
         }
     }
 }

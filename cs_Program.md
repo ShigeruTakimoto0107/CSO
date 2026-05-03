@@ -1,10 +1,6 @@
 ﻿using System;
-using System.Diagnostics;
-using System.Reflection;
-using System.Security.Principal;
-using System.Collections.Generic;
 using System.IO;
-using System.Text;
+using System.Collections.Generic;
 
 namespace PowerShellTerminal
 {
@@ -12,70 +8,45 @@ namespace PowerShellTerminal
     {
         static void Main(string[] args)
         {
-            if (args.Length == 0)
+            // 管理者権限チェック（Orchestratorからの再起動判定に使用）
+            if (args.Length > 0 && args[0].EndsWith(".psl"))
             {
-                Console.WriteLine("使用法: pst.exe <macro_file.psl>");
-                return;
+                RunMacro(args[0]);
             }
-
-            string filePath = args[0];
-            if (!File.Exists(filePath))
+            else
             {
-                Console.WriteLine("エラー: ファイルが見つかりません: " + filePath);
-                return;
+                Console.WriteLine("PowerShell Terminal (PST) - .pslファイルを指定してください。");
             }
+        }
 
-            // マクロファイルを読み込み、コメントを除いた最初の有効なコマンドを確認
-            Orchestrator orchestrator = new Orchestrator();
-            string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
-            string firstCommand = orchestrator.GetFirstEffectiveCommand(lines);
-
-            // 管理者権限が必要か判定
-            if (firstCommand.Equals("admin", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!IsRunAsAdmin())
-                {
-                    RestartAsAdmin(filePath);
-                    return;
-                }
-            }
-
-            // メイン処理の実行
+        static void RunMacro(string filePath)
+        {
             using (PowerShellController ps = new PowerShellController())
             {
+                Orchestrator orchestrator = new Orchestrator();
+                
                 try
                 {
-                    orchestrator.ExecuteMacro(new List<string>(lines), ps);
+                    // マクロの実行
+                    orchestrator.ExecuteFile(filePath, ps);
+
+                    // マクロ終了後の対話モード
+                    // PST> プロンプトを廃止し、PowerShellのプロンプトをそのまま活かす
+                    while (true)
+                    {
+                        string input = Console.ReadLine();
+                        if (string.IsNullOrEmpty(input)) continue;
+                        if (input.ToLower() == "exit") break;
+
+                        ps.SendLn(input);
+                        // SendLnの内部でプロンプト ">" を待機し表示するため、
+                        // ここで手動のプロンプト出力は行わない
+                    }
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine("エラー: " + ex.Message);
                 }
-            }
-        }
-
-        static bool IsRunAsAdmin()
-        {
-            WindowsIdentity identity = WindowsIdentity.GetCurrent();
-            WindowsPrincipal principal = new WindowsPrincipal(identity);
-            return principal.IsInRole(WindowsBuiltInRole.Administrator);
-        }
-
-        static void RestartAsAdmin(string filePath)
-        {
-            ProcessStartInfo proc = new ProcessStartInfo();
-            proc.FileName = Assembly.GetExecutingAssembly().Location;
-            proc.Arguments = "\"" + filePath + "\"";
-            proc.Verb = "runas"; // 管理者として実行
-            proc.UseShellExecute = true;
-
-            try
-            {
-                Process.Start(proc);
-            }
-            catch (Exception)
-            {
-                Console.WriteLine("管理者権限への昇格がキャンセルされました。");
             }
         }
     }
