@@ -1,66 +1,81 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
+using System.Threading; // ← これを追加
 
 namespace PowerShellTerminal
 {
-    public class Orchestrator : IDisposable
+    public class Orchestrator
     {
-        public void ExecuteMacro(string[] lines, PowerShellController ps)
+        public void ExecuteFile(string filePath, PowerShellController ps)
         {
-            foreach (string line in lines)
+            // エンコーディングを環境に合わせて調整（Shift-JIS/Default）
+            string[] lines = File.ReadAllLines(filePath, Encoding.Default);
+            ExecuteMacro(new List<string>(lines), ps);
+        }
+
+        public void ExecuteMacro(List<string> commands, PowerShellController ps)
+        {
+            foreach (string line in commands)
             {
                 string trimmedLine = line.Trim();
-                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";")) continue;
+                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";"))
+                    continue;
 
-                // 引数のパース（引用符対応）
-                List<string> args = ParseArgs(trimmedLine);
-                if (args.Count == 0) continue;
+                // コマンドと引数の解析（正規表現でクォートに対応）
+                var matches = Regex.Matches(trimmedLine, @"(?<match>""[^""]*""|'[^']*'|\S+)");
+                if (matches.Count == 0) continue;
 
-                string command = args[0].ToLower();
+                string command = matches[0].Value.ToLower();
+                List<string> args = new List<string>();
+                for (int i = 1; i < matches.Count; i++)
+                {
+                    args.Add(Unquote(matches[i].Value));
+                }
 
                 switch (command)
                 {
-                    case "admin":
-                        // Program.cs側で処理済みのためスキップ
+                    case "wait":
+                        if (args.Count > 0)
+                        {
+                            if (!ps.Wait(args[0]))
+                            {
+                                Console.WriteLine("Wait Timeout: " + args[0]);
+                            }
+                        }
                         break;
 
                     case "sendln":
-                        if (args.Count > 1) ps.SendLn(args[1]);
+                        string textToSend = args.Count > 0 ? args[0] : "";
+                        ps.SendLn(textToSend);
                         break;
 
-                    case "wait":
-                        if (args.Count > 1) ps.Wait(args[1]);
+                    case "pause":
+                        int sec = 1;
+                        // 引数がある場合は数値変換を試みる
+                        if (args.Count > 0) int.TryParse(args[0], out sec);
+                        Thread.Sleep(sec * 1000);
                         break;
 
                     default:
-                        // 未知のコマンドはそのまま送信してプロンプトを待つ（TeraTerm互換動作）
+                        // 未知のコマンドはそのままPowerShellに送信し、次のプロンプトを待つ
                         ps.SendLn(trimmedLine);
-                        ps.Wait(">", 5000); 
+                        ps.Wait(">");
                         break;
                 }
             }
         }
 
-        private List<string> ParseArgs(string input)
+        private string Unquote(string text)
         {
-            var args = new List<string>();
-            // 引用符内を保持しつつスペースで分割する正規表現
-            var regex = new Regex(@"(""(.*?)""|'(.*?)'|(\S+))");
-            foreach (Match match in regex.Matches(input))
+            if (string.IsNullOrEmpty(text)) return text;
+            if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
             {
-                string val = match.Value;
-                // 外側の引用符を外す
-                if ((val.StartsWith("\"") && val.EndsWith("\"")) || (val.StartsWith("'") && val.EndsWith("'")))
-                {
-                    val = val.Substring(1, val.Length - 2);
-                }
-                args.Add(val);
+                return text.Substring(1, text.Length - 2);
             }
-            return args;
+            return text;
         }
-
-        public void Dispose() { }
     }
 }
