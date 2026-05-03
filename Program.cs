@@ -1,5 +1,6 @@
 ﻿using System;
-using System.Threading;
+using System.IO;
+using System.Text;
 
 class Program
 {
@@ -7,28 +8,44 @@ class Program
     {
         if (args.Length == 0)
         {
-            Console.WriteLine("Usage: cso.exe [filename.csl]");
+            Console.WriteLine("Usage: pst.exe [filename.csl]");
             return;
         }
 
-        string filePath = args[0];
-        using (PowerShellController ps = new PowerShellController())
+        string macroPath = args[0];
+        if (!File.Exists(macroPath))
         {
-            try
-            {
-                // 起動直後の初期メッセージを読み飛ばすための猶予
-                //Thread.Sleep(1);
-                ps.ClearBuffer();
+            Console.WriteLine("[ERROR] File not found: " + macroPath);
+            return;
+        }
 
-                Orchestrator orch = new Orchestrator();
-                orch.ExecuteFile(filePath, ps);
-            }
-            catch (Exception ex)
+        PowerShellController ps = null;
+        try
+        {
+            ps = new PowerShellController();
+            Orchestrator engine = new Orchestrator();
+
+            // PowerShellの起動を少し待機してからバッファをクリア
+            //System.Threading.Thread.Sleep(1000);
+            ps.ClearBuffer();
+
+            // マクロの実行
+            // 内部で1行目が Admin の場合は再起動がかかり、このプロセスは終了する
+            engine.ExecuteFile(macroPath, ps);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[FATAL ERROR] " + ex.Message);
+        }
+        finally
+        {
+            if (ps != null)
             {
-                Console.WriteLine("\n[CSO ERROR] " + ex.Message);
+                ps.Dispose();
             }
         }
-        Console.WriteLine("\nProcess completed. Press any key to exit...");
+
+        Console.WriteLine("[PST] Finished. Press any key to exit...");
         Console.ReadKey();
     }
 }

@@ -2,16 +2,35 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions; // 正規表現のために追加
+using System.Text.RegularExpressions;
+using System.Diagnostics;
+using System.Security.Principal;
 
 public class Orchestrator
 {
     public void ExecuteFile(string filePath, PowerShellController ps)
     {
         if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
-        // UTF-8(BOMあり)ファイルを正しく読み込みます
+
+        // UTF-8(BOMあり/なし)を考慮して読み込み
         string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
-        ExecuteMacro(new List<string>(lines), ps);
+        List<string> commands = new List<string>(lines);
+
+        // --- 管理者昇格チェック (Step: Admin対応) ---
+        if (commands.Count > 0 && commands[0].Trim().Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!IsRunAsAdmin())
+            {
+                Console.WriteLine("[INFO] Admin directive detected. Restarting as Administrator...");
+                RestartAsAdmin(filePath);
+                return; // 現在のプロセス（非管理者）を終了
+            }
+            // 既に管理者の場合は、1行目の "Admin" をスキップして継続
+            commands.RemoveAt(0);
+        }
+        // --------------------------------------------
+
+        ExecuteMacro(commands, ps);
     }
 
     public void ExecuteMacro(List<string> commands, PowerShellController ps)
@@ -19,32 +38,24 @@ public class Orchestrator
         foreach (string line in commands)
         {
             string trimmedLine = line.Trim();
+
             // コメント行（# または ;）と空行をスキップ
             if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";")) continue;
 
-            // --- 引数解析ロジックの修正 ---
-            // 正規表現により、スペース区切りだが引用符内は保持する
-            // 1. [^\s"']+ (引用符もスペースもない連続した文字)
-            // 2. "([^"]*)" (ダブルクォートで囲まれた中身)
-            // 3. '([^']*)' (シングルクォートで囲まれた中身)
-            var matches = Regex.Matches(trimmedLine, @"(?<match>[^\s""']+)|""(?<match>[^""]*)""|'(?<match>[^']*)'");
-            
+            // クォート対応の字句解析 (Regex)
+            // コマンドと引数を分離（例: wait "Success Message"）
+            MatchCollection matches = Regex.Matches(trimmedLine, @"(?<match>""[^""]*""|'[^']*'|[^\s]+)");
             if (matches.Count == 0) continue;
 
-            // 1番目のマッチをコマンド、2番目以降を引数とする
-            string cmd = matches[0].Groups["match"].Value.ToLower();
-            
-            // 引数部分の取得（2番目以降の要素を結合するか、特定のコマンドでは2番目のみを使用）
-            string arg = matches.Count > 1 ? matches[1].Groups["match"].Value : string.Empty;
+            string cmd = matches[0].Value.ToLower();
+            string arg = matches.Count > 1 ? Unquote(matches[1].Value) : string.Empty;
 
             if (cmd == "sendln")
             {
-                // sendln の場合は、第1引数（arg）を送信
                 ps.SendLn(arg);
             }
             else if (cmd == "wait")
             {
-                // 正規表現の Groups["match"].Value ですでにクォートは外れているためそのまま渡す
                 ps.Wait(arg, 30000);
             }
             else if (cmd == "clearbuffer")
@@ -54,19 +65,52 @@ public class Orchestrator
             else if (cmd == "pause")
             {
                 int seconds;
-                if (!int.TryParse(arg, out seconds))
-                {
-                    seconds = 1;
-                }
+                if (!int.TryParse(arg, out seconds)) seconds = 1;
                 System.Threading.Thread.Sleep(seconds * 1000);
             }
             else
             {
-                // 未知のコマンド（PowerShell直接実行）
-                // ここは元の行をそのまま送る
+                // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待ちます
                 ps.SendLn(trimmedLine);
                 ps.Wait(">", 30000);
             }
+        }
+    }
+
+    private string Unquote(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
+        {
+            return text.Substring(1, text.Length - 2);
+        }
+        return text;
+    }
+
+    // 現在のプロセスが管理者権限で実行されているか確認
+    private bool IsRunAsAdmin()
+    {
+        WindowsIdentity id = WindowsIdentity.GetCurrent();
+        WindowsPrincipal principal = new WindowsPrincipal(id);
+        return principal.IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    // 自分自身を管理者権限で再起動
+    private void RestartAsAdmin(string filePath)
+    {
+        ProcessStartInfo psi = new ProcessStartInfo();
+        psi.FileName = Process.GetCurrentProcess().MainModule.FileName;
+        psi.Arguments = "\"" + filePath + "\""; // 実行中のマクロパスを引数に渡す
+        psi.Verb = "runas"; // 管理者として実行
+        psi.UseShellExecute = true; // Verb="runas" のために必須
+
+        try
+        {
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[ERROR] Failed to elevate: " + ex.Message);
         }
     }
 }

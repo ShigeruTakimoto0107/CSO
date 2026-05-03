@@ -1,7 +1,12 @@
-# sample.csl
-# すでにバッファはクリアされているので、ここから開始
-wait >
-sendln 'Start-Process powershell -verb runas'
+Admin
 wait >
 sendln ls
+wait >
+sendln "HELLO CSO"
+wait HELLO
+wait >
+sendln 'ls'
+wait >
+sendln 'Write-Host "HELLO CSO"'
+wait HELLO
 wait >
