@@ -1,51 +1,82 @@
 ﻿using System;
+using System.Diagnostics;
+using System.Reflection;
+using System.Security.Principal;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-class Program
+namespace PowerShellTerminal
 {
-    static void Main(string[] args)
+    class Program
     {
-        if (args.Length == 0)
+        static void Main(string[] args)
         {
-            Console.WriteLine("Usage: pst.exe [filename.csl]");
-            return;
-        }
-
-        string macroPath = args[0];
-        if (!File.Exists(macroPath))
-        {
-            Console.WriteLine("[ERROR] File not found: " + macroPath);
-            return;
-        }
-
-        PowerShellController ps = null;
-        try
-        {
-            ps = new PowerShellController();
-            Orchestrator engine = new Orchestrator();
-
-            // PowerShellの起動を少し待機してからバッファをクリア
-            //System.Threading.Thread.Sleep(1000);
-            ps.ClearBuffer();
-
-            // マクロの実行
-            // 内部で1行目が Admin の場合は再起動がかかり、このプロセスは終了する
-            engine.ExecuteFile(macroPath, ps);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("[FATAL ERROR] " + ex.Message);
-        }
-        finally
-        {
-            if (ps != null)
+            if (args.Length == 0)
             {
-                ps.Dispose();
+                Console.WriteLine("使用法: pst.exe <macro_file.psl>");
+                return;
+            }
+
+            string filePath = args[0];
+            if (!File.Exists(filePath))
+            {
+                Console.WriteLine("エラー: ファイルが見つかりません: " + filePath);
+                return;
+            }
+
+            // マクロファイルを読み込み、コメントを除いた最初の有効なコマンドを確認
+            Orchestrator orchestrator = new Orchestrator();
+            string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
+            string firstCommand = orchestrator.GetFirstEffectiveCommand(lines);
+
+            // 管理者権限が必要か判定
+            if (firstCommand.Equals("admin", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IsRunAsAdmin())
+                {
+                    RestartAsAdmin(filePath);
+                    return;
+                }
+            }
+
+            // メイン処理の実行
+            using (PowerShellController ps = new PowerShellController())
+            {
+                try
+                {
+                    orchestrator.ExecuteMacro(new List<string>(lines), ps);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("エラー: " + ex.Message);
+                }
             }
         }
 
-        Console.WriteLine("[PST] Finished. Press any key to exit...");
-        Console.ReadKey();
+        static bool IsRunAsAdmin()
+        {
+            WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            WindowsPrincipal principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+
+        static void RestartAsAdmin(string filePath)
+        {
+            ProcessStartInfo proc = new ProcessStartInfo();
+            proc.FileName = Assembly.GetExecutingAssembly().Location;
+            proc.Arguments = "\"" + filePath + "\"";
+            proc.Verb = "runas"; // 管理者として実行
+            proc.UseShellExecute = true;
+
+            try
+            {
+                Process.Start(proc);
+            }
+            catch (Exception)
+            {
+                Console.WriteLine("管理者権限への昇格がキャンセルされました。");
+            }
+        }
     }
 }
