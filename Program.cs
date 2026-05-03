@@ -1,10 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
-using System.Reflection;
 using System.Security.Principal;
-using System.Collections.Generic;
-using System.IO;
-using System.Text;
+using System.Windows.Forms;
 
 namespace PowerShellTerminal
 {
@@ -19,19 +16,10 @@ namespace PowerShellTerminal
             }
 
             string filePath = args[0];
-            if (!File.Exists(filePath))
-            {
-                Console.WriteLine("エラー: ファイルが見つかりません: " + filePath);
-                return;
-            }
-
-            // マクロファイルを読み込み、コメントを除いた最初の有効なコマンドを確認
             Orchestrator orchestrator = new Orchestrator();
-            string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
-            string firstCommand = orchestrator.GetFirstEffectiveCommand(lines);
 
-            // 管理者権限が必要か判定
-            if (firstCommand.Equals("admin", StringComparison.OrdinalIgnoreCase))
+            // 管理者権限が必要なマクロかチェック
+            if (orchestrator.IsAdminRequired(filePath))
             {
                 if (!IsRunAsAdmin())
                 {
@@ -40,17 +28,41 @@ namespace PowerShellTerminal
                 }
             }
 
-            // メイン処理の実行
-            using (PowerShellController ps = new PowerShellController())
+            // コンストラクタ内でPowerShellプロセスが起動されるため、Init()は不要
+            PowerShellController ps = new PowerShellController();
+            try
             {
-                try
+                // マクロファイルの実行
+                Console.WriteLine("--- マクロ実行開始 ---");
+                orchestrator.ExecuteFile(filePath, ps);
+                Console.WriteLine("--- マクロ実行完了 (対話モードに移行します。終了するには 'exit' を入力してください) ---");
+
+                // マクロ終了後、手動入力を受け付けるループ
+                while (true)
                 {
-                    orchestrator.ExecuteMacro(new List<string>(lines), ps);
+                    Console.Write("PST> ");
+                    string input = Console.ReadLine();
+
+                    if (string.IsNullOrEmpty(input)) continue;
+
+                    if (input.Trim().ToLower() == "exit")
+                    {
+                        ps.SendLn("exit");
+                        break;
+                    }
+
+                    ps.SendLn(input);
+                    ps.Wait(">", 30000);
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("エラー: " + ex.Message);
-                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("エラー: " + ex.Message);
+            }
+            finally
+            {
+                // 既存のDisposeメソッドを呼び出してプロセスを安全に終了させる
+                ps.Dispose();
             }
         }
 
@@ -63,19 +75,20 @@ namespace PowerShellTerminal
 
         static void RestartAsAdmin(string filePath)
         {
-            ProcessStartInfo proc = new ProcessStartInfo();
-            proc.FileName = Assembly.GetExecutingAssembly().Location;
-            proc.Arguments = "\"" + filePath + "\"";
-            proc.Verb = "runas"; // 管理者として実行
-            proc.UseShellExecute = true;
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.UseShellExecute = true;
+            startInfo.WorkingDirectory = Environment.CurrentDirectory;
+            startInfo.FileName = Application.ExecutablePath;
+            startInfo.Arguments = "\"" + filePath + "\"";
+            startInfo.Verb = "runas";
 
             try
             {
-                Process.Start(proc);
+                Process.Start(startInfo);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                Console.WriteLine("管理者権限への昇格がキャンセルされました。");
+                Console.WriteLine("管理者権限での実行がキャンセルされました: " + ex.Message);
             }
         }
     }

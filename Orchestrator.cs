@@ -8,21 +8,22 @@ namespace PowerShellTerminal
 {
     public class Orchestrator
     {
-        /// <summary>
-        /// コメントや空行を飛ばして、実質的な最初のコマンドを返します
-        /// </summary>
-        public string GetFirstEffectiveCommand(string[] lines)
+        public bool IsAdminRequired(string filePath)
+        {
+            if (!File.Exists(filePath)) return false;
+            string[] lines = File.ReadAllLines(filePath, Encoding.Default);
+            string firstCommand = GetFirstEffectiveCommand(lines);
+            return firstCommand.ToLower() == "admin";
+        }
+
+        private string GetFirstEffectiveCommand(string[] lines)
         {
             foreach (string line in lines)
             {
                 string trimmed = line.Trim();
-                // 空行およびコメント行をスキップ
                 if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#") || trimmed.StartsWith(";"))
-                {
                     continue;
-                }
 
-                // 最初に見つかった有効な行の、コマンド部分（最初のスペースまで）を返す
                 int spaceIndex = trimmed.IndexOf(' ');
                 return spaceIndex == -1 ? trimmed : trimmed.Substring(0, spaceIndex);
             }
@@ -32,8 +33,7 @@ namespace PowerShellTerminal
         public void ExecuteFile(string filePath, PowerShellController ps)
         {
             if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
-            // UTF-8 (BOMあり/なし両対応) で読み込み
-            string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
+            string[] lines = File.ReadAllLines(filePath, Encoding.Default);
             ExecuteMacro(new List<string>(lines), ps);
         }
 
@@ -42,45 +42,30 @@ namespace PowerShellTerminal
             foreach (string line in commands)
             {
                 string trimmedLine = line.Trim();
-
-                // コメント行・空行のスキップ
                 if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";"))
-                {
                     continue;
-                }
 
-                // adminコマンド自体は実行ループ内では無視する
-                if (trimmedLine.Equals("admin", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+                // adminコマンド自体は実行ループではスキップ
+                if (trimmedLine.ToLower() == "admin") continue;
 
-                // 引数解析（クォート対応）
-                List<string> args = ParseArguments(trimmedLine);
-                if (args.Count == 0) continue;
-
+                List<string> args = ParseLine(trimmedLine);
                 string command = args[0].ToLower();
 
                 if (command == "sendln")
                 {
-                    string text = args.Count > 1 ? args[1] : "";
-                    ps.SendLn(text);
+                    if (args.Count > 1) ps.SendLn(args[1]);
                 }
                 else if (command == "wait")
                 {
-                    string target = args.Count > 1 ? args[1] : ">";
-                    ps.Wait(target, 30000);
+                    if (args.Count > 1) ps.Wait(args[1], 30000);
                 }
                 else if (command == "pause")
                 {
                     int seconds = 1;
-                    // C# 4.0互換のため、out変数を事前に宣言
-                    int parsed;
-                    if (args.Count > 1 && int.TryParse(args[1], out parsed))
+                    if (args.Count > 1 && int.TryParse(args[1], out seconds))
                     {
-                        seconds = parsed;
+                        System.Threading.Thread.Sleep(seconds * 1000);
                     }
-                    System.Threading.Thread.Sleep(seconds * 1000);
                 }
                 else
                 {
@@ -91,30 +76,24 @@ namespace PowerShellTerminal
             }
         }
 
-        private List<string> ParseArguments(string line)
+        private List<string> ParseLine(string line)
         {
             List<string> args = new List<string>();
-            // 正規表現でクォート内またはスペース区切りの単語を抽出
-            MatchCollection matches = Regex.Matches(line, @"(?<match>""[^""]*""|'[^']*'|[^\s]+)");
-
+            // 引用符対応のパースロジック
+            MatchCollection matches = Regex.Matches(line, @"(?<match>[^\s""']+|""(?<inner>[^""]*)""|'(?<inner>[^']*)')");
+            
             foreach (Match m in matches)
             {
-                args.Add(Unquote(m.Groups["match"].Value));
+                if (m.Groups["inner"].Success)
+                    args.Add(m.Groups["inner"].Value);
+                else
+                    args.Add(m.Groups["match"].Value);
             }
-            return args;
-        }
 
-        private string Unquote(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return text;
-            if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
-            {
-                if (text.Length >= 2)
-                {
-                    return text.Substring(1, text.Length - 2);
-                }
-            }
-            return text;
+            // 引数が1つ（コマンドのみ）の場合のフォールバック
+            if (args.Count == 0) args.Add(line);
+            
+            return args;
         }
     }
 }
