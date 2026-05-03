@@ -1,59 +1,66 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace PowerShellTerminal
 {
-    public class Orchestrator
+    public class Orchestrator : IDisposable
     {
-        public void ExecuteFile(string filePath, PowerShellController ps)
+        public void ExecuteMacro(string[] lines, PowerShellController ps)
         {
-            if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
-            string[] lines = File.ReadAllLines(filePath, Encoding.Default);
-
             foreach (string line in lines)
             {
                 string trimmedLine = line.Trim();
-                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";"))
-                    continue;
+                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";")) continue;
 
-                // コマンド解析 (引用符対応)
-                var matches = Regex.Matches(trimmedLine, @"(?<match>""[^""]*""|'[^']*'|[^\s]+)");
-                if (matches.Count == 0) continue;
+                // 引数のパース（引用符対応）
+                List<string> args = ParseArgs(trimmedLine);
+                if (args.Count == 0) continue;
 
-                string command = matches[0].Value.ToLower();
-                string arg = matches.Count > 1 ? Unquote(matches[1].Value) : "";
+                string command = args[0].ToLower();
 
                 switch (command)
                 {
+                    case "admin":
+                        // Program.cs側で処理済みのためスキップ
+                        break;
+
                     case "sendln":
-                        ps.SendLn(arg);
+                        if (args.Count > 1) ps.SendLn(args[1]);
                         break;
+
                     case "wait":
-                        ps.Wait(arg, 30000);
+                        if (args.Count > 1) ps.Wait(args[1]);
                         break;
-                    case "pause":
-                        int sec = int.TryParse(arg, out sec) ? sec : 1;
-                        System.Threading.Thread.Sleep(sec * 1000);
-                        break;
+
                     default:
-                        // 未知のコマンドはそのままPowerShellへ
+                        // 未知のコマンドはそのまま送信してプロンプトを待つ（TeraTerm互換動作）
                         ps.SendLn(trimmedLine);
+                        ps.Wait(">", 5000); 
                         break;
                 }
             }
         }
 
-        private string Unquote(string text)
+        private List<string> ParseArgs(string input)
         {
-            if (string.IsNullOrEmpty(text)) return text;
-            if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
+            var args = new List<string>();
+            // 引用符内を保持しつつスペースで分割する正規表現
+            var regex = new Regex(@"(""(.*?)""|'(.*?)'|(\S+))");
+            foreach (Match match in regex.Matches(input))
             {
-                return text.Substring(1, text.Length - 2);
+                string val = match.Value;
+                // 外側の引用符を外す
+                if ((val.StartsWith("\"") && val.EndsWith("\"")) || (val.StartsWith("'") && val.EndsWith("'")))
+                {
+                    val = val.Substring(1, val.Length - 2);
+                }
+                args.Add(val);
             }
-            return text;
+            return args;
         }
+
+        public void Dispose() { }
     }
 }

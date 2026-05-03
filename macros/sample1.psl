@@ -2,7 +2,6 @@
 #
 #
 Admin
-wait >
 sendln ls
 wait >
 sendln "HELLO CSO"

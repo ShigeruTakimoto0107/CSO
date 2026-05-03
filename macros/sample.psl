@@ -1,6 +1,5 @@
 # sample.csl
 # すでにバッファはクリアされているので、ここから開始
-wait >
 sendln 'ECHO OFF'
 wait >
 sendln ls

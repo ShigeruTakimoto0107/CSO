@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Diagnostics;
+using System.Security.Principal;
 using System.IO;
-using System.Collections.Generic;
+using System.Linq;
 
 namespace PowerShellTerminal
 {
@@ -8,45 +10,80 @@ namespace PowerShellTerminal
     {
         static void Main(string[] args)
         {
-            // 管理者権限チェック（Orchestratorからの再起動判定に使用）
-            if (args.Length > 0 && args[0].EndsWith(".psl"))
+            if (args.Length == 0)
             {
-                RunMacro(args[0]);
+                Console.WriteLine("Usage: pst.exe <macro_file.psl>");
+                return;
             }
-            else
+
+            string filePath = Path.GetFullPath(args[0]);
+            if (!File.Exists(filePath))
             {
-                Console.WriteLine("PowerShell Terminal (PST) - .pslファイルを指定してください。");
+                Console.WriteLine("Error: File not found - " + filePath);
+                return;
+            }
+
+            // マクロの「実質的な1行目」が admin かどうかを判定
+            string[] lines = File.ReadAllLines(filePath);
+            string firstCommand = GetFirstCommand(lines);
+
+            if (firstCommand != null && firstCommand.Equals("admin", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IsAdmin())
+                {
+                    RunAsAdmin(filePath);
+                    return;
+                }
+            }
+
+            // メイン処理の実行
+            using (var ps = new PowerShellController())
+            using (var orchestrator = new Orchestrator())
+            {
+                orchestrator.ExecuteMacro(lines, ps);
+                
+                // マクロ終了後に入力待ちにする（対話モード）
+                while (true)
+                {
+                    string input = Console.ReadLine();
+                    if (input == null || input.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase)) break;
+                    ps.SendLn(input);
+                }
             }
         }
 
-        static void RunMacro(string filePath)
+        static string GetFirstCommand(string[] lines)
         {
-            using (PowerShellController ps = new PowerShellController())
+            foreach (var line in lines)
             {
-                Orchestrator orchestrator = new Orchestrator();
-                
-                try
-                {
-                    // マクロの実行
-                    orchestrator.ExecuteFile(filePath, ps);
+                string trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#") || trimmed.StartsWith(";")) continue;
+                return trimmed.Split(' ')[0];
+            }
+            return null;
+        }
 
-                    // マクロ終了後の対話モード
-                    // PST> プロンプトを廃止し、PowerShellのプロンプトをそのまま活かす
-                    while (true)
-                    {
-                        string input = Console.ReadLine();
-                        if (string.IsNullOrEmpty(input)) continue;
-                        if (input.ToLower() == "exit") break;
+        static bool IsAdmin()
+        {
+            var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
 
-                        ps.SendLn(input);
-                        // SendLnの内部でプロンプト ">" を待機し表示するため、
-                        // ここで手動のプロンプト出力は行わない
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("エラー: " + ex.Message);
-                }
+        static void RunAsAdmin(string filePath)
+        {
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = Process.GetCurrentProcess().MainModule.FileName;
+            startInfo.Arguments = "\"" + filePath + "\"";
+            startInfo.Verb = "runas";
+            startInfo.UseShellExecute = true;
+            try
+            {
+                Process.Start(startInfo);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("管理者権限での実行がキャンセルされました: " + ex.Message);
             }
         }
     }

@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Diagnostics;
-using System.IO;
 using System.Text;
 using System.Threading;
 
@@ -8,75 +7,72 @@ namespace PowerShellTerminal
 {
     public class PowerShellController : IDisposable
     {
-        private Process psProcess;
-        private StringBuilder outputBuffer = new StringBuilder();
-        private readonly object bufferLock = new object();
+        private Process _psProcess;
+        private StringBuilder _outputBuffer = new StringBuilder();
+        private AutoResetEvent _dataEvent = new AutoResetEvent(false);
 
         public PowerShellController()
         {
-            psProcess = new Process();
-            psProcess.StartInfo.FileName = "powershell.exe";
-            // -NoPromptを付けず、標準のプロンプトを出力させる
-            psProcess.StartInfo.Arguments = "-NoExit -ExecutionPolicy Bypass";
-            psProcess.StartInfo.UseShellExecute = false;
-            psProcess.StartInfo.RedirectStandardInput = true;
-            psProcess.StartInfo.RedirectStandardOutput = true;
-            psProcess.StartInfo.RedirectStandardError = true;
-            psProcess.StartInfo.CreateNoWindow = true;
-            psProcess.StartInfo.StandardOutputEncoding = Encoding.Default;
+            _psProcess = new Process();
+            _psProcess.StartInfo.FileName = "powershell.exe";
+            _psProcess.StartInfo.Arguments = "-NoExit -NoLogo";
+            _psProcess.StartInfo.UseShellExecute = false;
+            _psProcess.StartInfo.RedirectStandardInput = true;
+            _psProcess.StartInfo.RedirectStandardOutput = true;
+            _psProcess.StartInfo.RedirectStandardError = true;
+            _psProcess.StartInfo.CreateNoWindow = true;
+            _psProcess.StartInfo.StandardOutputEncoding = Encoding.GetEncoding(932); // Shift-JIS
 
-            psProcess.OutputDataReceived += (s, e) => {
+            _psProcess.OutputDataReceived += (s, e) => {
                 if (e.Data != null)
                 {
-                    lock (bufferLock)
-                    {
-                        outputBuffer.AppendLine(e.Data);
-                        Console.WriteLine(e.Data);
-                    }
+                    lock (_outputBuffer) { _outputBuffer.Append(e.Data + Environment.NewLine); }
+                    Console.WriteLine(e.Data); // 画面に出力
+                    _dataEvent.Set();
                 }
             };
 
-            psProcess.Start();
-            psProcess.BeginOutputReadLine();
-            psProcess.BeginErrorReadLine();
-
-            // 起動直後のプロンプト ">" を待機して初期表示を完了させる
-            Wait(">", 5000);
+            _psProcess.Start();
+            _psProcess.BeginOutputReadLine();
+            _psProcess.BeginErrorReadLine();
+            
+            // 起動直後のわずかな待機（プロンプトが出るのを待つ）
+            Thread.Sleep(200); 
         }
 
         public void SendLn(string command)
         {
-            outputBuffer.Clear(); // 送信前にバッファをクリアして判定精度を高める
-            psProcess.StandardInput.WriteLine(command);
-            // コマンド送信後、プロンプトが戻るまで待機
-            Wait(">", 30000);
+            _psProcess.StandardInput.WriteLine(command);
         }
 
-        public bool Wait(string target, int timeoutMs)
+        public bool Wait(string target, int timeoutMs = 30000)
         {
-            DateTime start = DateTime.Now;
-            while ((DateTime.Now - start).TotalMilliseconds < timeoutMs)
+            Stopwatch sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
             {
-                lock (bufferLock)
+                lock (_outputBuffer)
                 {
-                    string currentOutput = outputBuffer.ToString();
+                    string currentOutput = _outputBuffer.ToString();
                     if (currentOutput.Contains(target))
                     {
+                        // 見つかったらそこまでのバッファをクリア（次の待機に備える）
+                        int index = currentOutput.IndexOf(target);
+                        _outputBuffer.Remove(0, index + target.Length);
                         return true;
                     }
                 }
-                Thread.Sleep(50);
+                _dataEvent.WaitOne(100);
             }
             return false;
         }
 
         public void Dispose()
         {
-            if (psProcess != null && !psProcess.HasExited)
+            if (!_psProcess.HasExited)
             {
-                psProcess.Kill();
-                psProcess.Dispose();
+                _psProcess.Kill();
             }
+            _psProcess.Dispose();
         }
     }
 }
