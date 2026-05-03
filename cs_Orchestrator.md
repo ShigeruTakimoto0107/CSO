@@ -3,114 +3,118 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Diagnostics;
-using System.Security.Principal;
 
-public class Orchestrator
+namespace PowerShellTerminal
 {
-    public void ExecuteFile(string filePath, PowerShellController ps)
+    public class Orchestrator
     {
-        if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
-
-        // UTF-8(BOMあり/なし)を考慮して読み込み
-        string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
-        List<string> commands = new List<string>(lines);
-
-        // --- 管理者昇格チェック (Step: Admin対応) ---
-        if (commands.Count > 0 && commands[0].Trim().Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        /// <summary>
+        /// コメントや空行を飛ばして、実質的な最初のコマンドを返します
+        /// </summary>
+        public string GetFirstEffectiveCommand(string[] lines)
         {
-            if (!IsRunAsAdmin())
+            foreach (string line in lines)
             {
-                Console.WriteLine("[INFO] Admin directive detected. Restarting as Administrator...");
-                RestartAsAdmin(filePath);
-                return; // 現在のプロセス（非管理者）を終了
+                string trimmed = line.Trim();
+                // 空行およびコメント行をスキップ
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#") || trimmed.StartsWith(";"))
+                {
+                    continue;
+                }
+
+                // 最初に見つかった有効な行の、コマンド部分（最初のスペースまで）を返す
+                int spaceIndex = trimmed.IndexOf(' ');
+                return spaceIndex == -1 ? trimmed : trimmed.Substring(0, spaceIndex);
             }
-            // 既に管理者の場合は、1行目の "Admin" をスキップして継続
-            commands.RemoveAt(0);
+            return string.Empty;
         }
-        // --------------------------------------------
 
-        ExecuteMacro(commands, ps);
-    }
-
-    public void ExecuteMacro(List<string> commands, PowerShellController ps)
-    {
-        foreach (string line in commands)
+        public void ExecuteFile(string filePath, PowerShellController ps)
         {
-            string trimmedLine = line.Trim();
+            if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
+            // UTF-8 (BOMあり/なし両対応) で読み込み
+            string[] lines = File.ReadAllLines(filePath, Encoding.UTF8);
+            ExecuteMacro(new List<string>(lines), ps);
+        }
 
-            // コメント行（# または ;）と空行をスキップ
-            if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";")) continue;
+        public void ExecuteMacro(List<string> commands, PowerShellController ps)
+        {
+            foreach (string line in commands)
+            {
+                string trimmedLine = line.Trim();
 
-            // クォート対応の字句解析 (Regex)
-            // コマンドと引数を分離（例: wait "Success Message"）
-            MatchCollection matches = Regex.Matches(trimmedLine, @"(?<match>""[^""]*""|'[^']*'|[^\s]+)");
-            if (matches.Count == 0) continue;
+                // コメント行・空行のスキップ
+                if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#") || trimmedLine.StartsWith(";"))
+                {
+                    continue;
+                }
 
-            string cmd = matches[0].Value.ToLower();
-            string arg = matches.Count > 1 ? Unquote(matches[1].Value) : string.Empty;
+                // adminコマンド自体は実行ループ内では無視する
+                if (trimmedLine.Equals("admin", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
-            if (cmd == "sendln")
-            {
-                ps.SendLn(arg);
-            }
-            else if (cmd == "wait")
-            {
-                ps.Wait(arg, 30000);
-            }
-            else if (cmd == "clearbuffer")
-            {
-                ps.ClearBuffer();
-            }
-            else if (cmd == "pause")
-            {
-                int seconds;
-                if (!int.TryParse(arg, out seconds)) seconds = 1;
-                System.Threading.Thread.Sleep(seconds * 1000);
-            }
-            else
-            {
-                // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待ちます
-                ps.SendLn(trimmedLine);
-                ps.Wait(">", 30000);
+                // 引数解析（クォート対応）
+                List<string> args = ParseArguments(trimmedLine);
+                if (args.Count == 0) continue;
+
+                string command = args[0].ToLower();
+
+                if (command == "sendln")
+                {
+                    string text = args.Count > 1 ? args[1] : "";
+                    ps.SendLn(text);
+                }
+                else if (command == "wait")
+                {
+                    string target = args.Count > 1 ? args[1] : ">";
+                    ps.Wait(target, 30000);
+                }
+                else if (command == "pause")
+                {
+                    int seconds = 1;
+                    // C# 4.0互換のため、out変数を事前に宣言
+                    int parsed;
+                    if (args.Count > 1 && int.TryParse(args[1], out parsed))
+                    {
+                        seconds = parsed;
+                    }
+                    System.Threading.Thread.Sleep(seconds * 1000);
+                }
+                else
+                {
+                    // 未知のコマンドはそのままPowerShellへ送り、プロンプトを待機
+                    ps.SendLn(trimmedLine);
+                    ps.Wait(">", 30000);
+                }
             }
         }
-    }
 
-    private string Unquote(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return text;
-        if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
+        private List<string> ParseArguments(string line)
         {
-            return text.Substring(1, text.Length - 2);
+            List<string> args = new List<string>();
+            // 正規表現でクォート内またはスペース区切りの単語を抽出
+            MatchCollection matches = Regex.Matches(line, @"(?<match>""[^""]*""|'[^']*'|[^\s]+)");
+
+            foreach (Match m in matches)
+            {
+                args.Add(Unquote(m.Groups["match"].Value));
+            }
+            return args;
         }
-        return text;
-    }
 
-    // 現在のプロセスが管理者権限で実行されているか確認
-    private bool IsRunAsAdmin()
-    {
-        WindowsIdentity id = WindowsIdentity.GetCurrent();
-        WindowsPrincipal principal = new WindowsPrincipal(id);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
-    }
-
-    // 自分自身を管理者権限で再起動
-    private void RestartAsAdmin(string filePath)
-    {
-        ProcessStartInfo psi = new ProcessStartInfo();
-        psi.FileName = Process.GetCurrentProcess().MainModule.FileName;
-        psi.Arguments = "\"" + filePath + "\""; // 実行中のマクロパスを引数に渡す
-        psi.Verb = "runas"; // 管理者として実行
-        psi.UseShellExecute = true; // Verb="runas" のために必須
-
-        try
+        private string Unquote(string text)
         {
-            Process.Start(psi);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("[ERROR] Failed to elevate: " + ex.Message);
+            if (string.IsNullOrEmpty(text)) return text;
+            if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
+            {
+                if (text.Length >= 2)
+                {
+                    return text.Substring(1, text.Length - 2);
+                }
+            }
+            return text;
         }
     }
 }
