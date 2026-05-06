@@ -1,0 +1,4 @@
+cso.exe
+*.pdb
+bin/
+obj/
