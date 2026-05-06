@@ -1,0 +1,16 @@
+# sample.csl
+# すでにバッファはクリアされているので、ここから開始
+wait >
+sendln 'ECHO OFF'
+wait >
+sendln ls
+wait >
+sendln "HELLO CSO"
+wait HELLO
+wait >
+sendln 'ls'
+wait >
+sendln 'Write-Host "HELLO CSO"'
+wait HELLO
+wait >
+Read-Host
