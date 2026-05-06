@@ -10,6 +10,12 @@ if not exist "%CSC_PATH%" (
     exit /b
 )
 
+:: bin フォルダが無ければ作成
+if not exist ".\bin" (
+    echo [INFO] Creating bin directory...
+    mkdir ".\bin"
+)
+
 :: 参照の追加とUTF-8対応を明示
 "%CSC_PATH%" /out:.\bin\%TARGET_EXE% /nologo /optimize /codepage:65001 /r:System.dll .\src\*.cs
 
